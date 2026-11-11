@@ -62,6 +62,14 @@ def cmd_rollback(config: Config, args: argparse.Namespace) -> None:
     ModelRegistry(config.registry.path).rollback(reason=args.reason)
 
 
+def cmd_serve(config: Config, args: argparse.Namespace) -> None:
+    import uvicorn
+
+    from rl_portfolio.serving.api import create_app
+
+    uvicorn.run(create_app(config.registry.path), host=args.host, port=args.port)
+
+
 def _fmt(rl: dict[str, float], ew: dict[str, float]) -> str:
     keys = ["cagr", "volatility", "sharpe", "max_drawdown"]
     rows = [f"  {'metric':<14}{'policy':>10}{'equal wt':>10}"]
@@ -77,6 +85,7 @@ COMMANDS: dict[str, tuple[Callable[[Config, argparse.Namespace], None], str]] = 
     "retrain": (cmd_retrain, "walk-forward retrain and register the last window as candidate"),
     "promote": (cmd_promote, "promote a candidate through the evaluation gate"),
     "rollback": (cmd_rollback, "re-activate the previously active model"),
+    "serve": (cmd_serve, "serve allocations over HTTP"),
 }
 
 
