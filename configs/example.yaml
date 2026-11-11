@@ -1,0 +1,58 @@
+# Example configuration. Every value below is a placeholder default chosen so the
+# pipeline runs end to end on a laptop in minutes. The tuned values used for the
+# MSc thesis and the paper-trading deployment are private and are not in this repo.
+
+seed: 7
+
+data:
+  source: synthetic          # synthetic | yfinance (needs `uv sync --extra fetch`)
+  # Example universe of broad index ETFs. Not the universe used in the thesis.
+  tickers: [VTI, VEA, VWO, BND]
+  start: "2010-01-01"
+  frequency: weekly
+  synthetic_weeks: 520
+  data_dir: data
+
+features:
+  # Pluggable feature builders, see src/rl_portfolio/features/.
+  - name: trailing_return
+    window: 4
+  - name: rolling_volatility
+    window: 12
+  - name: momentum
+    window: 26
+
+reward:
+  name: mean_variance        # quadratic utility on net weekly return
+  risk_aversion: 1.0         # placeholder
+  transaction_cost: 0.001    # proportional, per unit of turnover (placeholder)
+
+sizing:
+  name: fixed
+  capital: 10000.0           # paper capital managed by the strategy
+
+ppo:
+  total_timesteps: 20000
+  learning_rate: 0.0003
+  n_steps: 256
+  batch_size: 64
+  gamma: 0.99
+  net_arch: [64, 64]
+
+rolling:
+  train_weeks: 260
+  validation_weeks: 52
+  step_weeks: 52
+
+registry:
+  path: registry
+  min_sharpe_edge: 0.0       # candidate must beat equal weight on validation Sharpe by this much
+
+tracking:
+  enabled: true
+  uri: sqlite:///mlruns.db
+  experiment: rl-etf-allocation
+
+monitoring:
+  max_turnover: 0.5
+  psi_threshold: 0.2
