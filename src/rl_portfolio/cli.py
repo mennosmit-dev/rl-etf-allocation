@@ -20,15 +20,46 @@ def cmd_data(config: Config, _args: argparse.Namespace) -> None:
 
 
 def cmd_train(config: Config, _args: argparse.Namespace) -> None:
-    from rl_portfolio.data.dataset import get_or_build_dataset
-    from rl_portfolio.training.train import latest_split, prepare, train_window
+    from rl_portfolio.training.pipeline import train_and_register
 
-    returns, meta = get_or_build_dataset(config)
-    prep = prepare(config, returns)
-    result = train_window(config, prep, meta, *latest_split(config, prep))
+    record = train_and_register(config)
     logger.info(
-        "Saved %s\n%s", result.model_path, _fmt(result.rl.metrics, result.equal_weight.metrics)
+        "Candidate %s\n%s",
+        record.model_id,
+        _fmt(record.validation_metrics, record.equal_weight_metrics),
     )
+
+
+def cmd_retrain(config: Config, _args: argparse.Namespace) -> None:
+    from rl_portfolio.training.pipeline import rolling_retrain
+
+    result = rolling_retrain(config)
+    logger.info(
+        "Walk-forward out of sample over %d windows\n%s",
+        len(result.windows),
+        _fmt(result.rl_metrics, result.equal_weight_metrics),
+    )
+    logger.info("Candidate %s", result.candidate.model_id)
+
+
+def cmd_promote(config: Config, args: argparse.Namespace) -> None:
+    from rl_portfolio.registry import EvaluationGate, ModelRegistry
+
+    registry = ModelRegistry(config.registry.path)
+    model_id = args.model_id
+    if model_id is None:
+        candidates = [r for r in registry.list() if r.status == "candidate"]
+        if not candidates:
+            raise SystemExit("no candidate to promote")
+        model_id = candidates[-1].model_id
+    gate = EvaluationGate(min_sharpe_edge=config.registry.min_sharpe_edge)
+    registry.promote(model_id, gate, reason=args.reason)
+
+
+def cmd_rollback(config: Config, args: argparse.Namespace) -> None:
+    from rl_portfolio.registry import ModelRegistry
+
+    ModelRegistry(config.registry.path).rollback(reason=args.reason)
 
 
 def _fmt(rl: dict[str, float], ew: dict[str, float]) -> str:
@@ -42,7 +73,10 @@ def _fmt(rl: dict[str, float], ew: dict[str, float]) -> str:
 
 COMMANDS: dict[str, tuple[Callable[[Config, argparse.Namespace], None], str]] = {
     "data": (cmd_data, "build and validate the weekly return dataset"),
-    "train": (cmd_train, "train on the latest window and score it"),
+    "train": (cmd_train, "train on the latest window and register a candidate"),
+    "retrain": (cmd_retrain, "walk-forward retrain and register the last window as candidate"),
+    "promote": (cmd_promote, "promote a candidate through the evaluation gate"),
+    "rollback": (cmd_rollback, "re-activate the previously active model"),
 }
 
 

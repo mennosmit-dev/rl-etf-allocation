@@ -54,4 +54,5 @@ select = ["E", "F", "I", "B", "UP", "T20"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: trains several small models"]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning", "ignore::UserWarning"]
