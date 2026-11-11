@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pandera>=0.24",
     "pyarrow>=15",
+    "gymnasium>=1.0",
 ]
 
 [project.optional-dependencies]
