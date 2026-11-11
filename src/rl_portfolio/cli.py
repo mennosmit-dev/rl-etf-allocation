@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from collections.abc import Callable
 
@@ -62,6 +63,66 @@ def cmd_rollback(config: Config, args: argparse.Namespace) -> None:
     ModelRegistry(config.registry.path).rollback(reason=args.reason)
 
 
+def cmd_paper(config: Config, args: argparse.Namespace) -> None:
+    from rl_portfolio.data.dataset import get_or_build_dataset
+    from rl_portfolio.envs.sizing import make_sizer
+    from rl_portfolio.paper.simulate import equal_weight_fn, run_paper_trading
+    from rl_portfolio.registry import ModelRegistry
+    from rl_portfolio.serving.inference import AllocationPolicy
+
+    record = ModelRegistry(config.registry.path).active()
+    if record is None:
+        raise SystemExit("no active model; run `rl-etf promote` first")
+    policy = AllocationPolicy(record)
+    returns, _ = get_or_build_dataset(config)
+    start = len(returns) - args.weeks
+    common = dict(
+        returns=returns,
+        start=start,
+        sizer=make_sizer(config.sizing),
+        initial_cash=config.sizing.capital,
+        cost_rate=config.reward.transaction_cost,
+        max_turnover=config.monitoring.max_turnover,
+    )
+    rl = run_paper_trading(policy.target_weights, **common)
+    ew = run_paper_trading(equal_weight_fn(record.tickers), **common)
+    logger.info(
+        "Paper trading over the last %d weeks (simulated broker)\n%s",
+        args.weeks,
+        _fmt(rl.metrics, ew.metrics),
+    )
+
+
+def cmd_monitor(config: Config, args: argparse.Namespace) -> None:
+    from rl_portfolio.data.dataset import get_or_build_dataset
+    from rl_portfolio.monitoring.drift import check_drift
+    from rl_portfolio.registry import ModelRegistry
+
+    record = ModelRegistry(config.registry.path).active()
+    if record is None:
+        raise SystemExit("no active model")
+    returns, _ = get_or_build_dataset(config)
+    returns = returns[record.tickers]
+    dates = list(map(str, returns.index))
+    lo, hi = dates.index(record.train_window[0]), dates.index(record.train_window[1])
+    # Weekly returns, not the rolling features: overlapping windows make a few
+    # months of a 26-week feature nearly one value, which inflates PSI.
+    values = returns.to_numpy()
+    report = check_drift(
+        values[lo : hi + 1],
+        values[-args.weeks :],
+        [f"return:{t}" for t in record.tickers],
+        psi_threshold=config.monitoring.psi_threshold,
+    )
+    worst = sorted(report.feature_psi.items(), key=lambda kv: -kv[1])[:5]
+    logger.info(
+        "Drift check over the last %d weeks: %s; highest PSI %s",
+        args.weeks,
+        "ok" if report.ok else f"drift in {report.drifted_features}",
+        json.dumps({k: round(v, 3) for k, v in worst}),
+    )
+
+
 def cmd_serve(config: Config, args: argparse.Namespace) -> None:
     import uvicorn
 
@@ -85,6 +146,8 @@ COMMANDS: dict[str, tuple[Callable[[Config, argparse.Namespace], None], str]] = 
     "retrain": (cmd_retrain, "walk-forward retrain and register the last window as candidate"),
     "promote": (cmd_promote, "promote a candidate through the evaluation gate"),
     "rollback": (cmd_rollback, "re-activate the previously active model"),
+    "paper": (cmd_paper, "paper-trade the active model against equal weight"),
+    "monitor": (cmd_monitor, "return drift of recent weeks against the training window"),
     "serve": (cmd_serve, "serve allocations over HTTP"),
 }
 
