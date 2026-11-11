@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Reference stack for scheduled paper trading with the rl-etf-allocation image.
+  Reduced and parameterised; the approval Lambda and the execution lock table
+  are described in docs/architecture.md but left out here.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Container image built from the Dockerfile in this repository.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  BrokerSecretArn:
+    Type: String
+    Description: Secrets Manager secret holding BROKER_API_KEY and BROKER_API_SECRET.
+  AlertEmail:
+    Type: String
+    Description: Address subscribed to task-failure alerts.
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 90
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-broker-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref BrokerSecretArn
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: artifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${ArtifactBucket.Arn}/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "1024"
+      Memory: "2048"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: rl-etf
+          Image: !Ref ImageUri
+          Essential: true
+          Environment:
+            - Name: ARTIFACT_BUCKET
+              Value: !Ref ArtifactBucket
+            - Name: LOG_LEVEL
+              Value: INFO
+          Secrets:
+            - Name: BROKER_API_KEY
+              ValueFrom: !Sub "${BrokerSecretArn}:BROKER_API_KEY::"
+            - Name: BROKER_API_SECRET
+              ValueFrom: !Sub "${BrokerSecretArn}:BROKER_API_SECRET::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: rl-etf
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run-task
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref TaskDefinition
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: [!GetAtt ExecutionRole.Arn, !GetAtt TaskRole.Arn]
+
+  WeeklyPaperSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Weekly paper rebalance; the container receives the subcommand.
+      ScheduleExpression: cron(0 10 ? * MON *)
+      ScheduleExpressionTimezone: America/New_York
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt Cluster.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"containerOverrides": [{"name": "rl-etf", "command": ["paper"]}]}'
+        EcsParameters:
+          TaskDefinitionArn: !Ref TaskDefinition
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              Subnets: !Ref SubnetIds
+              SecurityGroups: [!Ref SecurityGroupId]
+              AssignPublicIp: ENABLED
+
+  RetrainSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Twice-yearly retrain; produces a candidate, never promotes.
+      ScheduleExpression: cron(0 2 1 6,12 ? *)
+      ScheduleExpressionTimezone: Europe/Amsterdam
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt Cluster.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"containerOverrides": [{"name": "rl-etf", "command": ["retrain"]}]}'
+        EcsParameters:
+          TaskDefinitionArn: !Ref TaskDefinition
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              Subnets: !Ref SubnetIds
+              SecurityGroups: [!Ref SecurityGroupId]
+              AssignPublicIp: ENABLED
+
+  TaskFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn: [!GetAtt Cluster.Arn]
+          lastStatus: [STOPPED]
+          containers:
+            exitCode: [{ "anything-but": 0 }]
+      Targets:
+        - Arn: !Ref AlertTopic
+          Id: alert-topic
+
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref AlertTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+
+Outputs:
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+  AlertTopicArn:
+    Value: !Ref AlertTopic
