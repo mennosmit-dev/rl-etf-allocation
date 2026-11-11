@@ -19,6 +19,18 @@ def cmd_data(config: Config, _args: argparse.Namespace) -> None:
     save_dataset(returns, meta, config.data.data_dir)
 
 
+def cmd_train(config: Config, _args: argparse.Namespace) -> None:
+    from rl_portfolio.data.dataset import get_or_build_dataset
+    from rl_portfolio.training.train import latest_split, prepare, train_window
+
+    returns, meta = get_or_build_dataset(config)
+    prep = prepare(config, returns)
+    result = train_window(config, prep, meta, *latest_split(config, prep))
+    logger.info(
+        "Saved %s\n%s", result.model_path, _fmt(result.rl.metrics, result.equal_weight.metrics)
+    )
+
+
 def _fmt(rl: dict[str, float], ew: dict[str, float]) -> str:
     keys = ["cagr", "volatility", "sharpe", "max_drawdown"]
     rows = [f"  {'metric':<14}{'policy':>10}{'equal wt':>10}"]
@@ -30,6 +42,7 @@ def _fmt(rl: dict[str, float], ew: dict[str, float]) -> str:
 
 COMMANDS: dict[str, tuple[Callable[[Config, argparse.Namespace], None], str]] = {
     "data": (cmd_data, "build and validate the weekly return dataset"),
+    "train": (cmd_train, "train on the latest window and score it"),
 }
 
 
