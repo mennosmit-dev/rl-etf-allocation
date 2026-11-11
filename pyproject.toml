@@ -10,7 +10,15 @@ dependencies = [
     "pandas>=2.2",
     "pydantic>=2.6",
     "pyyaml>=6.0",
+    "pandera>=0.24",
+    "pyarrow>=15",
 ]
+
+[project.optional-dependencies]
+fetch = ["yfinance>=0.2.40"]
+
+[project.scripts]
+rl-etf = "rl_portfolio.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6"]
