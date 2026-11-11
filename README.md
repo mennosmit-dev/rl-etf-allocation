@@ -73,4 +73,4 @@ The tuned hyperparameters, the feature set, the reward function, the dynamic por
 
 ## Status
 
-The private version runs as scheduled paper trading on AWS ECS Fargate, with a weekly precheck, an approval step, a weekly execution job and twice-yearly retraining. This repository is educational and is not financial advice.
+The private version runs weekly on AWS ECS Fargate: a precheck, a manual approval step before any order, execution and twice-yearly retraining. This repository is educational and is not financial advice.

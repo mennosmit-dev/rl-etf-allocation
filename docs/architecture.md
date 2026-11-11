@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes how the code in this repository fits together and how
-the same code runs as scheduled paper-trading jobs on AWS. The deployment
+the same code runs as scheduled jobs on AWS. The deployment
 details that would identify accounts, buckets or credentials are left out.
 
 ## Code layout
@@ -55,9 +55,9 @@ flowchart LR
    history file.
 4. Serving and paper trading only ever load the active model.
 
-## Paper trading on AWS
+## Scheduled jobs on AWS
 
-The deployed version runs the same package as one container image with
+The private version runs the same package as one container image with
 several scheduled entry points.
 
 ```mermaid
@@ -67,7 +67,7 @@ flowchart TD
     S -->|Friday| R[Report task]
     S -->|Twice a year| T[Retrain task]
     P & X & R & T --> F[ECS Fargate]
-    F --> B[Broker paper API]
+    F --> B[Broker API]
     F --> S3[(S3 versioned artifacts)]
     F --> SM[Secrets Manager]
     F --> CW[CloudWatch Logs]
@@ -82,7 +82,7 @@ flowchart TD
   the drift and order checks and sends a summary with a signed, expiring
   approval link. It never submits orders.
 - The Monday task reprices at execution time, re-runs the checks, and only
-  submits paper orders when an unexpired approval for that exact allocation
+  submits orders when an unexpired approval for that exact allocation
   exists. Weekend prices are never trusted for execution.
 - A lock prevents two overlapping runs from trading the same week twice.
 - Retraining produces a candidate. Promotion stays a separate, logged step.
